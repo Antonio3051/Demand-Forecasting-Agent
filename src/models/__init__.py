@@ -45,8 +45,8 @@ ForecasterFactory = Callable[..., BaseForecaster]
 _CANDIDATES: tuple[tuple[str, str], ...] = (
     ("naive", "NaiveForecaster"),
     ("arima", "ArimaForecaster"),
-    ("prophet_model", "ProphetForecaster"),
-    ("lightgbm_model", "LightGBMForecaster"),
+    ("prophet", "ProphetForecaster"),
+    ("lgbm", "LightGBMForecaster"),
 )
 
 #: display name  ->  class.  Filled at import time by ``_discover``.
