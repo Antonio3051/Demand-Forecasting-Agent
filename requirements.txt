@@ -1,0 +1,27 @@
+# ---------------------------------------------------------------------------
+# Python dependencies for the AI Demand Forecasting Agent.
+#
+# Install everything with:
+#     pip install -r requirements.txt
+#
+# Each line is one library. Versions are pinned with ">=" lower bounds so
+# students get a recent release while still allowing security patches.
+# ---------------------------------------------------------------------------
+
+# --- User interface -------------------------------------------------------
+streamlit>=1.49          # Turns Python scripts into interactive web apps (app.py)
+
+# --- Data wrangling -------------------------------------------------------
+pandas>=2.0              # DataFrames: loading, cleaning and reshaping time series
+numpy>=1.26,<2.0         # Numerical arrays used under the hood by every model.
+                         # (<2.0 because pmdarima's pre-built wheels are compiled
+                         #  against the NumPy 1.x ABI.)
+
+# --- Visualisation --------------------------------------------------------
+plotly>=5.20             # Interactive charts (zoom, hover, export) for src/visualizer.py
+
+# --- Forecasting models (one Strategy each in src/models/) ----------------
+pmdarima>=2.0            # auto_arima: classical statistical forecasting (ARIMA)
+prophet>=1.1             # Meta's additive model with trend + seasonality + holidays
+lightgbm>=4.0            # Gradient-boosted trees for feature-based forecasting
+scikit-learn>=1.4        # Evaluation metrics (MAE, RMSE, ...) and utilities
