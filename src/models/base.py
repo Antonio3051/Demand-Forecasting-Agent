@@ -189,7 +189,7 @@ class BaseForecaster(ABC):
         Having one helper guarantees every strategy returns identical columns,
         which makes the agent and visualizer code model-agnostic.
         """
-        index = self._future_index(horizon)
+        index = self._future_index(horizon).rename("date")
         frame = pd.DataFrame({"yhat": list(yhat)}, index=index)
         if yhat_lower is not None and yhat_upper is not None:
             frame["yhat_lower"] = list(yhat_lower)

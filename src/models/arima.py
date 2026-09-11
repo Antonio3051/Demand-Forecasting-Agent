@@ -61,7 +61,9 @@ class ArimaForecaster(BaseForecaster):
     # -- Strategy contract ------------------------------------------------
     def fit(self, series: pd.Series) -> ArimaForecaster:
         self._remember(series)
-        seasonal = self.season_length > 1 and len(series) >= 2 * self.season_length
+        # Seasonal differencing eats one full season of data, so require a
+        # comfortable margin (3 seasons) before turning seasonality on.
+        seasonal = self.season_length > 1 and len(series) >= 3 * self.season_length
         self._model = pm.auto_arima(
             self._history.to_numpy(),
             seasonal=seasonal,

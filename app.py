@@ -188,10 +188,34 @@ def load_data(cfg: dict) -> pd.Series | None:
 
 
 # ----------------------------------------------------------------------
+# Fingerprints: detect when a stored report no longer matches the inputs.
+# ----------------------------------------------------------------------
+def _data_key(series: pd.Series) -> int:
+    """Cheap, deterministic fingerprint of the prepared series."""
+    return int(pd.util.hash_pandas_object(series, index=True).sum())
+
+
+def _settings_key(cfg: dict) -> tuple:
+    """The sidebar values that influence the agent's result."""
+    return (
+        cfg["horizon"],
+        cfg["metric"],
+        cfg["season_length"],
+        tuple(cfg["candidates"]),
+        cfg["forced"],
+    )
+
+
+# ----------------------------------------------------------------------
 # Step 2 — REASON / DECIDE / ACT: run the agent.
 # ----------------------------------------------------------------------
 def run_agent(series: pd.Series, cfg: dict) -> None:
     """Button handler: execute the agent and stash the report in session_state."""
+    # A report belongs to the dataset it was computed on. If the user loaded
+    # or re-mapped data, the old report is meaningless: forget it.
+    if st.session_state.get("report_data_key") != _data_key(series):
+        st.session_state.pop("report", None)
+
     if not cfg["candidates"]:
         st.warning("Select at least one candidate model in the sidebar.")
         return
@@ -212,8 +236,11 @@ def run_agent(series: pd.Series, cfg: dict) -> None:
             except (ValueError, RuntimeError) as exc:
                 st.error(str(exc))
                 return
-        # Persist so the report survives the next widget interaction.
+        # Persist so the report survives the next widget interaction, along
+        # with fingerprints of the inputs it was computed from.
         st.session_state["report"] = report
+        st.session_state["report_data_key"] = _data_key(series)
+        st.session_state["report_settings_key"] = _settings_key(cfg)
 
 
 # ----------------------------------------------------------------------
@@ -223,6 +250,14 @@ def render_report(series: pd.Series, cfg: dict) -> None:
     report = st.session_state.get("report")
     if report is None:
         return
+
+    # Same data but different sidebar settings: the report is still valid
+    # for what it was computed with, so keep it but flag it as outdated.
+    if st.session_state.get("report_settings_key") != _settings_key(cfg):
+        st.info(
+            "Settings changed since this report was generated — "
+            "press **Run forecasting agent** to refresh it."
+        )
 
     st.success(f"🏆 Selected strategy: **{report.chosen_model}**")
     st.markdown(report.rationale)
