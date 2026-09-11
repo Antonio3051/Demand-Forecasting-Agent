@@ -36,13 +36,12 @@ import pandas as pd
 import streamlit as st
 
 from src import visualizer as viz
-from src.agent import ForecastingAgent
-from src.data_handler import (
-    DEFAULT_SEASON_LENGTH,
-    SUPPORTED_FREQUENCIES,
-    DataHandler,
-)
+from src.agent import DEFAULT_CANDIDATES, METRICS, TEST_FRACTION, ForecastingAgent
+from src.data_handler import SUPPORTED_FREQUENCIES, DataHandler, DatasetSummary
 from src.models import MODEL_REGISTRY, UNAVAILABLE_MODELS, available_models
+
+#: Sentinel shown in the column pickers meaning "let DataHandler guess".
+AUTO = "(auto-detect)"
 
 # ----------------------------------------------------------------------
 # Page configuration — must be the first Streamlit call in the script.
@@ -70,13 +69,13 @@ def _sample_data(periods: int, freq: str) -> pd.DataFrame:
 
 
 # ----------------------------------------------------------------------
-# Sidebar: every user-controlled parameter lives here.
+# Sidebar: every user-controlled parameter lives here.  It is drawn in two
+# halves because the forecast defaults (season length) depend on the
+# frequency we only know *after* the data has been loaded.
 # ----------------------------------------------------------------------
-def render_sidebar() -> dict:
-    """Draw the controls and return their values as a plain dict."""
+def render_data_controls() -> dict:
+    """Sidebar section 1 — where the data comes from."""
     st.sidebar.title("⚙️ Settings")
-
-    # --- 1. Data source -------------------------------------------------
     st.sidebar.header("1. Data")
     source = st.sidebar.radio(
         "Source",
@@ -90,22 +89,38 @@ def render_sidebar() -> dict:
             type=["csv", "xlsx", "xls"],
         )
 
-    freq_label = st.sidebar.selectbox("Frequency", list(SUPPORTED_FREQUENCIES), index=0)
-    freq = SUPPORTED_FREQUENCIES[freq_label]
+    freq_label = st.sidebar.selectbox(
+        "Frequency",
+        list(SUPPORTED_FREQUENCIES),
+        index=0,
+        help="Auto-detect looks at the spacing between your dates. Override if needed.",
+    )
+    return dict(source=source, uploaded=uploaded, freq=SUPPORTED_FREQUENCIES[freq_label])
 
-    # --- 2. Forecast settings --------------------------------------------
+
+def render_forecast_controls(summary: DatasetSummary) -> dict:
+    """Sidebar sections 2 + 3 — how the agent should work."""
     st.sidebar.header("2. Forecast")
     horizon = st.sidebar.slider("Horizon (periods ahead)", 1, 120, 30)
     season_length = st.sidebar.number_input(
         "Season length",
         min_value=1,
         max_value=365,
-        value=DEFAULT_SEASON_LENGTH[freq],
+        value=summary.season_length,
+        # Keying on the frequency re-applies the default when it changes.
+        key=f"season_{summary.frequency}",
         help="7 = weekly pattern in daily data, 12 = yearly pattern in monthly data.",
+    )
+    test_share = st.sidebar.slider(
+        "Hold-out share for evaluation (%)",
+        5,
+        40,
+        int(TEST_FRACTION * 100),
+        help="The most recent slice of history the models never see during evaluation.",
     )
     metric = st.sidebar.selectbox(
         "Decision metric",
-        ["mae", "rmse", "mape"],
+        list(METRICS),
         format_func=str.upper,
         help="The agent picks the model with the lowest value of this metric.",
     )
@@ -115,7 +130,7 @@ def render_sidebar() -> dict:
     candidates = st.sidebar.multiselect(
         "Candidates the agent may choose from",
         options=available_models(),
-        default=available_models(),
+        default=[m for m in DEFAULT_CANDIDATES if m in available_models()],
     )
     mode = st.sidebar.radio(
         "Selection mode",
@@ -131,11 +146,9 @@ def render_sidebar() -> dict:
                 st.caption(f"**{cls}** — {reason}")
 
     return dict(
-        source=source,
-        uploaded=uploaded,
-        freq=freq,
         horizon=int(horizon),
         season_length=int(season_length),
+        test_size=test_share / 100,
         metric=metric,
         candidates=candidates,
         forced=forced,
@@ -145,46 +158,55 @@ def render_sidebar() -> dict:
 # ----------------------------------------------------------------------
 # Step 1 — PERCEIVE: obtain a raw DataFrame and turn it into a Series.
 # ----------------------------------------------------------------------
-def load_data(cfg: dict) -> pd.Series | None:
-    """Return the prepared time series, or ``None`` if we are still waiting."""
+def load_data(cfg: dict) -> tuple[pd.Series, DatasetSummary] | None:
+    """Return the prepared series + summary, or ``None`` if we are still waiting."""
+    date_col: str | None = None
+    value_col: str | None = None
     if cfg["source"] == "Sample dataset":
         raw = _sample_data(periods=730, freq="D")
-        date_col, value_col = "date", "demand"
     else:
         if cfg["uploaded"] is None:
             st.info("👈 Upload a file in the sidebar to get started.")
             return None
         raw = _load_uploaded(cfg["uploaded"].getvalue(), cfg["uploaded"].name)
-        # Let the user map their columns — files rarely use our names.
+        # DataHandler guesses the columns; the pickers let the user override.
+        options = [AUTO, *map(str, raw.columns)]
         c1, c2 = st.columns(2)
-        date_col = c1.selectbox("Date column", raw.columns, key="date_col")
-        value_col = c2.selectbox(
-            "Demand column",
-            raw.columns,
-            index=min(1, len(raw.columns) - 1),
-            key="value_col",
-        )
+        picked_date = c1.selectbox("Date column", options, key="date_col")
+        picked_value = c2.selectbox("Demand column", options, key="value_col")
+        date_col = None if picked_date == AUTO else picked_date
+        value_col = None if picked_value == AUTO else picked_value
 
     with st.expander("🔍 Raw data preview", expanded=False):
         st.dataframe(raw.head(20), width="stretch")
 
     try:
-        series, summary = DataHandler.prepare_series(raw, date_col, value_col, cfg["freq"])
+        series, summary = DataHandler.prepare_time_series(raw, date_col, value_col, cfg["freq"])
     except ValueError as exc:
         st.error(f"Could not prepare the data: {exc}")
         return None
 
     # Key facts about the series in a row of metric cards.
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Periods", summary.n_periods)
-    m2.metric("From", summary.start.date().isoformat())
-    m3.metric("To", summary.end.date().isoformat())
-    m4.metric("Mean demand", f"{summary.mean:,.1f}")
+    m2.metric("Frequency", summary.frequency_label.capitalize())
+    m3.metric("From", summary.start.date().isoformat())
+    m4.metric("To", summary.end.date().isoformat())
+    m5.metric("Mean demand", f"{summary.mean:,.1f}")
+
+    notes = [
+        f"date column **{summary.date_col}**, demand column **{summary.value_col}**",
+        f"frequency {'inferred as' if summary.frequency_inferred else 'set to'} "
+        f"**{summary.frequency_label}**",
+    ]
+    if summary.duplicates_merged:
+        notes.append(f"{summary.duplicates_merged} rows on repeated dates were summed")
     if summary.missing_filled:
-        st.caption(f"ℹ️ {summary.missing_filled} missing periods were filled with 0.")
+        notes.append(f"{summary.missing_filled} missing periods were interpolated")
+    st.caption("ℹ️ " + "; ".join(notes) + ".")
 
     st.plotly_chart(viz.plot_history(series), width="stretch")
-    return series
+    return series, summary
 
 
 # ----------------------------------------------------------------------
@@ -201,6 +223,7 @@ def _settings_key(cfg: dict) -> tuple:
         cfg["horizon"],
         cfg["metric"],
         cfg["season_length"],
+        cfg["test_size"],
         tuple(cfg["candidates"]),
         cfg["forced"],
     )
@@ -225,6 +248,7 @@ def run_agent(series: pd.Series, cfg: dict) -> None:
             candidates=cfg["candidates"],
             metric=cfg["metric"],
             season_length=cfg["season_length"],
+            test_size=cfg["test_size"],
         )
         with st.spinner("The agent is evaluating strategies…"):
             try:
@@ -306,9 +330,12 @@ def render_report(series: pd.Series, cfg: dict) -> None:
               with two methods: `fit(series)` and `predict(horizon)`.
             * Every algorithm (Naive, ARIMA, Prophet, LightGBM) is a **Strategy**:
               a subclass that implements those two methods its own way.
-            * `src/agent.py` is the **Context**: it evaluates each strategy on
-              unseen data, picks the best one and explains why — without knowing
-              anything about how the models work internally.
+            * `src/agent.py` is the **Context**: it holds out the most recent
+              15 % of history, fits every strategy on the rest, scores each one
+              with MAPE on the unseen slice, picks the best and explains why —
+              without knowing anything about how the models work internally.
+              `model, why = ForecastingAgent().select_model(series)` is the
+              whole API.
             * Adding a new algorithm = one new file in `src/models/` + one line in
               the registry. The UI and the agent need **zero** changes.
 
@@ -329,10 +356,12 @@ def main() -> None:
         "forecasting strategies, decides which one to trust, and explains its choice."
     )
 
-    cfg = render_sidebar()
-    series = load_data(cfg)  # PERCEIVE
-    if series is None:
+    cfg = render_data_controls()
+    loaded = load_data(cfg)  # PERCEIVE
+    if loaded is None:
         return
+    series, summary = loaded
+    cfg.update(render_forecast_controls(summary))
     st.divider()
     run_agent(series, cfg)  # REASON → DECIDE → ACT
     render_report(series, cfg)  # EXPLAIN
