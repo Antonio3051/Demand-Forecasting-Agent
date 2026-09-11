@@ -51,9 +51,26 @@ ForecastingAgent (Context) ──uses──> BaseForecaster (Strategy interface)
   `fit(series)` and `predict(horizon)`, plus shared helpers for validation
   and output formatting.
 * Each concrete model adapts its library to that contract.
-* `ForecastingAgent` (`src/agent.py`) only speaks the contract: it trains
-  every candidate on a hold-out window, ranks them by MAE / RMSE / MAPE,
-  refits the winner on all data and produces a plain-English rationale.
+* `ForecastingAgent` (`src/agent.py`) only speaks the contract: it holds out
+  the last 15 % of history, fits Auto-ARIMA, Prophet and LightGBM on the rest,
+  scores each with MAPE on the unseen slice, refits the winner on all data and
+  explains the decision from the data properties and the error metrics.
+
+### Using the core without Streamlit
+
+```python
+import pandas as pd
+from src.data_handler import DataHandler
+from src.agent import ForecastingAgent
+
+raw = pd.read_csv("my_sales.csv")  # any date column + any numeric column
+series, summary = DataHandler.prepare_time_series(raw)  # auto-detects columns & frequency
+print(summary.frequency_label, summary.missing_filled)  # e.g. "daily", 3 gaps interpolated
+
+model, explanation = ForecastingAgent().select_model(series)
+print(explanation)  # Markdown: data -> experiment -> decision -> why
+forecast = model.predict(horizon=30)  # the returned model is already fitted
+```
 
 ### Adding a new algorithm
 
