@@ -234,13 +234,16 @@ class ForecastingAgent:
         if name in {"Seasonal Naive", "Auto-ARIMA"}:
             return create_model(name, season_length=m)
         if name == "LightGBM":
-            # Seasonal lags only when there is enough history to learn them.
-            lags = {1, 2, 3}
+            # Seasonal lags / windows only when there is enough history to learn them.
+            lags, windows = {1, 2, 3}, {3}
             if n_obs > m + 10:
                 lags.add(m)
+                windows.add(m)
             if n_obs > 2 * m + 10:
                 lags.add(2 * m)
-            return create_model(name, lags=tuple(sorted(lags)))
+            return create_model(
+                name, lags=tuple(sorted(lags)), rolling_windows=tuple(sorted(windows))
+            )
         return create_model(name)
 
     # ------------------------------------------------------------------
@@ -591,8 +594,9 @@ class ForecastingAgent:
             return txt + ". It is also robust to outliers such as promotions."
         if name == "LightGBM":
             txt = (
-                "Gradient-boosted trees learn *non-linear* interactions between lagged demand "
-                "and calendar features (weekday, month)"
+                "Gradient-boosted trees learn *non-linear* interactions between lagged demand, "
+                "rolling-window statistics (recent level and volatility) and calendar "
+                "features (weekday, month)"
             )
             if p.n_obs >= 300:
                 txt += f", and {p.n_obs} observations give the trees enough rows to generalise"
