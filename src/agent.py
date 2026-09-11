@@ -250,18 +250,25 @@ class ForecastingAgent:
         if forced_model is not None:
             if forced_model not in self.candidates:
                 raise ValueError(f"{forced_model!r} is not among the candidates.")
-            chosen = forced_model
-            reason = f"You asked explicitly for **{chosen}**."
+            preference = [forced_model]
+            reason = f"You asked explicitly for **{forced_model}**."
         else:
-            chosen = healthy[0].model_name
+            # Ordered wish-list: best first, runner-ups as fallbacks.
+            preference = [e.model_name for e in healthy]
             reason = self._explain_choice(healthy)
 
         # --- ACT --------------------------------------------------------
         # Refit on the *entire* history: more data -> better final forecast.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            final_model = self._build(chosen).fit(series)
-            forecast = final_model.predict(horizon)
+        # A model that behaved on the training window can still fail on the
+        # full series (e.g. seasonal ARIMA on very short data), so we walk
+        # down the preference list instead of giving up.
+        chosen, forecast, failures = self._refit_first_working(preference, series, horizon)
+        if failures:
+            skipped = "; ".join(f"{name} ({err})" for name, err in failures)
+            reason += (
+                f"\n\n⚠️ Fallback applied: {skipped} could not be refitted on the full "
+                f"history, so **{chosen}** was used instead."
+            )
 
         # --- EXPLAIN ----------------------------------------------------
         rationale = (
@@ -283,6 +290,26 @@ class ForecastingAgent:
         )
 
     # ------------------------------------------------------------------
+    def _refit_first_working(
+        self, preference: list[str], series: pd.Series, horizon: int
+    ) -> tuple[str, pd.DataFrame, list[tuple[str, str]]]:
+        """Fit models in order of preference; return the first that succeeds.
+
+        Returns ``(model_name, forecast, failures)`` where ``failures`` lists
+        ``(model_name, error_message)`` for every model that was skipped.
+        """
+        failures: list[tuple[str, str]] = []
+        for name in preference:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    forecast = self._build(name).fit(series).predict(horizon)
+                return name, forecast, failures
+            except Exception as exc:  # noqa: BLE001
+                failures.append((name, f"{exc.__class__.__name__}: {exc}"))
+        details = "; ".join(f"{n}: {e}" for n, e in failures)
+        raise RuntimeError(f"No model could be fitted on the full history. Details: {details}")
+
     def _explain_choice(self, ranked: list[EvaluationResult]) -> str:
         """Turn the ranking into a sentence a business user can read."""
         best = ranked[0]
