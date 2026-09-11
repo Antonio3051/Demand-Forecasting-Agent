@@ -32,8 +32,8 @@ Pick *Sample dataset* in the sidebar and press **Run forecasting agent**.
         ├── base.py           # BaseForecaster — abstract Strategy (fit / predict)
         ├── naive.py          # Seasonal-naive baseline
         ├── arima.py          # Auto-ARIMA (pmdarima)
-        ├── prophet_model.py  # Prophet
-        ├── lightgbm_model.py # LightGBM with lag features
+        ├── prophet.py        # Prophet (Stan output silenced during fit)
+        ├── lgbm.py           # LightGBM with lag + rolling-window features
         └── __init__.py       # Model registry (discovery + factory)
 ```
 

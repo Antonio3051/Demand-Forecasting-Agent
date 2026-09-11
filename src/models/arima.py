@@ -13,10 +13,14 @@ It is the classic statistical approach to time series:
 * **I(d)**   – the series is differenced *d* times to remove trend.
 * **MA(q)**  – today's value depends on the previous *q* forecast errors.
 
-Choosing p, d, q by hand is tedious, so ``auto_arima`` searches many
-combinations and keeps the one with the best information criterion (AIC).
-With ``seasonal=True`` it becomes **SARIMA** and also learns a seasonal
-pattern of length ``m``.
+Choosing p, d, q by hand is tedious, so ``auto_arima`` does it for us:
+
+* **d** is picked with a unit-root test (KPSS): difference until stationary.
+* **p, q** are searched *stepwise* — start from a few sensible orders, move
+  to a neighbour whenever it lowers the **AIC**, stop when nothing improves.
+
+With ``seasonal=True`` it becomes **SARIMA** and additionally tunes the
+seasonal orders (P, D, Q) for a cycle of length ``m``.
 
 Where does it fit in the Strategy pattern?
 ------------------------------------------
@@ -66,14 +70,30 @@ class ArimaForecaster(BaseForecaster):
         seasonal = self.season_length > 1 and len(series) >= 3 * self.season_length
         self._model = pm.auto_arima(
             self._history.to_numpy(),
+            # --- what to optimise -------------------------------------
+            start_p=1,
+            start_q=1,
+            max_p=self.max_order,
+            max_q=self.max_order,
+            max_order=self.max_order,  # cap on p + q keeps the search fast
+            d=None,  # None = choose d with the KPSS stationarity test
+            information_criterion="aic",
+            # --- seasonality ------------------------------------------
             seasonal=seasonal,
             m=self.season_length if seasonal else 1,
-            max_order=self.max_order,
-            stepwise=True,  # greedy search: much faster than a full grid
+            D=None,  # None = choose D with the OCSB seasonal test
+            # --- search behaviour ---------------------------------------
+            stepwise=True,  # greedy neighbour search: much faster than a full grid
             suppress_warnings=True,
             error_action="ignore",  # skip parameter combos that fail to converge
+            trace=False,  # keep the console quiet
         )
         return self
+
+    @property
+    def order(self) -> tuple[int, int, int] | None:
+        """The ``(p, d, q)`` that ``auto_arima`` settled on (after ``fit``)."""
+        return None if self._model is None else self._model.order
 
     def predict(self, horizon: int) -> pd.DataFrame:
         self._check_is_fitted()
